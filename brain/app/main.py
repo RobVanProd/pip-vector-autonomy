@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -13,6 +16,12 @@ from .conversation_session import ConversationSession
 from .dashboard import DASHBOARD_HTML
 from .emotion import EmotionEngine
 from .events import add_event, list_events
+from .external_camera import (
+    LATEST_FILENAME as EXTERNAL_CAMERA_LATEST_FILENAME,
+    capture_external_view,
+    external_camera_status,
+    get_latest_external_view,
+)
 from .executors import get_executor
 from .goals import GoalEngine
 from .listener import Listener
@@ -29,6 +38,7 @@ from .robot_io import (
 from .schemas import (
     AutonomyConfig,
     AutonomyStatus,
+    Action,
     BehaviorAction,
     ChatRequest,
     ConversationSessionConfig,
@@ -64,6 +74,7 @@ MODEL = os.getenv("VECTOR_BRAIN_MODEL", "gemma4:e4b")
 EXECUTION_MODE = os.getenv("VECTOR_EXECUTION_MODE", "mock")
 VECTOR_SERIAL = os.getenv("VECTOR_SERIAL")
 VISION_MODEL = os.getenv("VECTOR_VISION_MODEL", "moondream:latest,llava:7b")
+EXTERNAL_CAMERA_VISION_MODEL = os.getenv("VECTOR_EXTERNAL_CAMERA_VISION_MODEL", "llava:7b,moondream:latest")
 CAPTURE_DIR = Path(os.getenv("VECTOR_CAPTURE_DIR", "captures")).resolve()
 
 app = FastAPI(title="Vector Brain", version="0.3.0")
@@ -125,6 +136,7 @@ async def health():
         "execution_mode": EXECUTION_MODE,
         "vector_serial": VECTOR_SERIAL,
         "vision_model": VISION_MODEL,
+        "external_camera_vision_model": EXTERNAL_CAMERA_VISION_MODEL,
     }
 
 
@@ -165,6 +177,115 @@ async def _live_robot_state(fallback: RobotState) -> RobotState:
     return snapshot_to_robot_state(snapshot, fallback)
 
 
+def _robot_safe_to_command(snapshot: dict) -> bool:
+    if snapshot.get("connected") is not True:
+        return False
+    unsafe_flags = ("picked_up", "being_held", "cliff_detected", "low_battery", "sleeping")
+    return not any(bool(snapshot.get(flag)) for flag in unsafe_flags)
+
+
+def _safe_control_validation_actions(actions: list[Action], *, allow_drive: bool) -> tuple[list[Action], list[dict]]:
+    safe_actions: list[Action] = []
+    denied_actions: list[dict] = []
+    allowed = {"head", "lift", "turn", "stop", "say", "animation"}
+    if allow_drive:
+        allowed.add("drive")
+
+    for action in actions:
+        action_type = getattr(action, "type", None)
+        if action_type == "drive" and allow_drive:
+            if abs(action.speed_mmps) <= 35 and action.duration_ms <= 600:
+                safe_actions.append(action)
+            else:
+                denied_actions.append({"action": action.model_dump(), "reason": "drive exceeds validation limit"})
+        elif action_type == "turn":
+            if abs(action.degrees) <= 35:
+                safe_actions.append(action)
+            else:
+                denied_actions.append({"action": action.model_dump(), "reason": "turn exceeds validation limit"})
+        elif action_type in allowed:
+            safe_actions.append(action)
+        else:
+            denied_actions.append({"action": action.model_dump(), "reason": "not allowed during control validation"})
+
+    if safe_actions and safe_actions[-1].type != "stop":
+        safe_actions.append(StopAction(type="stop"))
+    return safe_actions, denied_actions
+
+
+def _copy_validation_image(capture: dict, label: str) -> str | None:
+    path_value = capture.get("path")
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return None
+    copy_path = path.with_name(f"{label}.{time.time_ns()}.jpg")
+    try:
+        shutil.copy2(path, copy_path)
+        return str(copy_path)
+    except Exception:
+        return None
+
+
+def _observed_control_change(
+    before_snapshot: dict,
+    after_snapshot: dict,
+    before_image: str | None,
+    after_image: str | None,
+) -> dict[str, Any]:
+    head_delta = _numeric_delta(before_snapshot.get("head_angle_deg"), after_snapshot.get("head_angle_deg"))
+    lift_delta = _numeric_delta(before_snapshot.get("lift_height_mm"), after_snapshot.get("lift_height_mm"))
+    angle_delta = _pose_angle_delta(before_snapshot.get("pose"), after_snapshot.get("pose"))
+    frame_delta = _image_mean_abs_delta(before_image, after_image)
+    physical_change_detected = any(
+        [
+            head_delta is not None and abs(head_delta) >= 4.0,
+            lift_delta is not None and abs(lift_delta) >= 3.0,
+            angle_delta is not None and abs(angle_delta) >= 4.0,
+            frame_delta is not None and frame_delta >= 2.0,
+        ]
+    )
+    return {
+        "physical_change_detected": physical_change_detected,
+        "head_angle_delta_deg": head_delta,
+        "lift_height_delta_mm": lift_delta,
+        "pose_angle_delta_deg": angle_delta,
+        "external_frame_mean_abs_delta": frame_delta,
+        "before_image": before_image,
+        "after_image": after_image,
+    }
+
+
+def _numeric_delta(before: Any, after: Any) -> float | None:
+    try:
+        return round(float(after) - float(before), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pose_angle_delta(before: Any, after: Any) -> float | None:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    return _numeric_delta(before.get("angle_deg"), after.get("angle_deg"))
+
+
+def _image_mean_abs_delta(before_path: str | None, after_path: str | None) -> float | None:
+    if not before_path or not after_path:
+        return None
+    try:
+        from PIL import Image, ImageChops, ImageStat
+
+        with Image.open(before_path) as before_image, Image.open(after_path) as after_image:
+            before_gray = before_image.convert("L").resize((160, 90))
+            after_gray = after_image.convert("L").resize((160, 90))
+            diff = ImageChops.difference(before_gray, after_gray)
+            stat = ImageStat.Stat(diff)
+            return round(float(stat.mean[0]), 2)
+    except Exception:
+        return None
+
+
 @app.get("/robot/state")
 async def robot_state(live: bool = False):
     snapshot = await read_robot_snapshot(
@@ -175,6 +296,9 @@ async def robot_state(live: bool = False):
     latest_vision = get_latest_vision()
     if latest_vision:
         snapshot["latest_vision"] = latest_vision
+    latest_external_view = get_latest_external_view()
+    if latest_external_view:
+        snapshot["latest_external_view"] = latest_external_view
     return snapshot
 
 
@@ -196,6 +320,162 @@ async def robot_latest_image():
     if not path.exists():
         raise HTTPException(status_code=404, detail="no camera image has been captured yet")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/external-camera/status")
+async def external_camera_status_route():
+    return external_camera_status(CAPTURE_DIR)
+
+
+@app.post("/external-camera/capture")
+async def external_camera_capture(describe: bool = True):
+    result = await capture_external_view(
+        output_dir=CAPTURE_DIR,
+        ollama_base_url=OLLAMA_BASE_URL,
+        model=EXTERNAL_CAMERA_VISION_MODEL,
+        describe=describe,
+    )
+    add_event("external_camera", result)
+    return result
+
+
+@app.get("/external-camera/latest.jpg")
+async def external_camera_latest_image():
+    path = CAPTURE_DIR / EXTERNAL_CAMERA_LATEST_FILENAME
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="no external camera image has been captured yet")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.post("/validation/pip-area")
+async def validate_pip_area():
+    result = await capture_external_view(
+        output_dir=CAPTURE_DIR,
+        ollama_base_url=OLLAMA_BASE_URL,
+        model=EXTERNAL_CAMERA_VISION_MODEL,
+        describe=True,
+    )
+    robot_snapshot = await read_robot_snapshot(
+        VECTOR_SERIAL,
+        max_age_seconds=60,
+        allow_cooldown_cache=True,
+    )
+    validation = {
+        "external_camera": result.get("validation"),
+        "robot_connected": robot_snapshot.get("connected") is True,
+        "robot_safe_to_command": _robot_safe_to_command(robot_snapshot),
+        "robot_state": robot_snapshot,
+    }
+    validation["ok"] = bool(
+        validation["external_camera"]
+        and validation["external_camera"].get("ok")
+        and validation["robot_connected"]
+        and validation["robot_safe_to_command"]
+    )
+    add_event("pip_area_validation", {"capture": result, "validation": validation})
+    return {"capture": result, "validation": validation}
+
+
+@app.post("/validation/gemma-control")
+async def validate_gemma_control(
+    prompt: str = "Validation only: move your head up to 35 degrees, then stop. Do not drive.",
+    dry_run: bool = False,
+    allow_drive: bool = False,
+):
+    before_capture = await capture_external_view(
+        output_dir=CAPTURE_DIR,
+        ollama_base_url=OLLAMA_BASE_URL,
+        model=EXTERNAL_CAMERA_VISION_MODEL,
+        describe=True,
+    )
+    before_image = _copy_validation_image(before_capture, "gemma-control-before")
+    before_snapshot = await read_robot_snapshot(VECTOR_SERIAL, max_age_seconds=0, allow_cooldown_cache=False)
+    if not _robot_safe_to_command(before_snapshot):
+        validation = {
+            "ok": False,
+            "reason": "robot is not in a safe state for physical validation",
+            "robot_state": before_snapshot,
+            "external_camera": before_capture.get("validation"),
+        }
+        add_event("gemma_control_validation", validation)
+        return {"validation": validation}
+
+    robot_state = snapshot_to_robot_state(before_snapshot)
+    plan_response = await create_plan(
+        PlanRequest(user_text=prompt, robot_state=robot_state),
+        model=MODEL,
+        ollama_base_url=OLLAMA_BASE_URL,
+        execution_mode=EXECUTION_MODE,
+    )
+    safe_actions, denied_actions = _safe_control_validation_actions(plan_response.actions, allow_drive=allow_drive)
+    if not safe_actions:
+        validation = {
+            "ok": False,
+            "reason": "Gemma did not propose a safe visible action for this validation.",
+            "planned_actions": [action.model_dump() for action in plan_response.actions],
+            "denied_actions": denied_actions,
+        }
+        add_event("gemma_control_validation", validation)
+        return {"plan": plan_response, "validation": validation}
+
+    executor = get_executor(EXECUTION_MODE, serial=VECTOR_SERIAL)
+    execute_response = await executor.execute(
+        ExecuteRequest(actions=safe_actions, robot_state=robot_state, dry_run=dry_run)
+    )
+    await asyncio.sleep(1.25)
+
+    after_snapshot = await read_robot_snapshot(VECTOR_SERIAL, max_age_seconds=0, allow_cooldown_cache=False)
+    after_capture = await capture_external_view(
+        output_dir=CAPTURE_DIR,
+        ollama_base_url=OLLAMA_BASE_URL,
+        model=EXTERNAL_CAMERA_VISION_MODEL,
+        describe=True,
+    )
+    after_image = _copy_validation_image(after_capture, "gemma-control-after")
+    observed = _observed_control_change(before_snapshot, after_snapshot, before_image, after_image)
+    before_camera = before_capture.get("validation") or {}
+    after_camera = after_capture.get("validation") or {}
+    action_errors = [
+        item for item in execute_response.executed
+        if isinstance(item, dict) and item.get("error")
+    ]
+    validation = {
+        "ok": bool(
+            before_camera.get("pip_visible")
+            and before_camera.get("image_ok")
+            and after_camera.get("image_ok")
+            and execute_response.ok
+            and (dry_run or observed["physical_change_detected"])
+        ),
+        "dry_run": dry_run,
+        "prompt": prompt,
+        "safe_actions": [action.model_dump() for action in safe_actions],
+        "denied_actions": denied_actions,
+        "action_errors": action_errors,
+        "observed": observed,
+        "external_camera_before": before_camera,
+        "external_camera_after": after_camera,
+    }
+    add_event(
+        "gemma_control_validation",
+        {
+            "plan": {
+                "actions": [action.model_dump() for action in plan_response.actions],
+                "raw": plan_response.raw,
+            },
+            "execute": execute_response.model_dump(),
+            "validation": validation,
+        },
+    )
+    return {
+        "plan": plan_response,
+        "execute": execute_response,
+        "before_capture": before_capture,
+        "after_capture": after_capture,
+        "before_state": before_snapshot,
+        "after_state": after_snapshot,
+        "validation": validation,
+    }
 
 
 @app.get("/vision/status", response_model=VisionStatus)

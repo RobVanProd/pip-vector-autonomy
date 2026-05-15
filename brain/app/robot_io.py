@@ -128,6 +128,25 @@ async def capture_and_describe_view(
     return result
 
 
+async def describe_image_b64(
+    image_b64: str,
+    *,
+    ollama_base_url: str,
+    model: str,
+    prompt: str | None = None,
+) -> dict[str, Any]:
+    return await _describe_with_fallbacks(
+        image_b64=image_b64,
+        ollama_base_url=ollama_base_url,
+        models=_vision_models(model),
+        prompt=prompt,
+    )
+
+
+def average_image_brightness(image: Any) -> float | None:
+    return _average_brightness(image)
+
+
 def get_latest_vision() -> dict[str, Any]:
     return dict(_LATEST_VISION)
 
@@ -407,7 +426,13 @@ def _vision_models(model: str) -> list[str]:
     return models or ["moondream"]
 
 
-async def _describe_with_fallbacks(*, image_b64: str, ollama_base_url: str, models: list[str]) -> dict[str, Any]:
+async def _describe_with_fallbacks(
+    *,
+    image_b64: str,
+    ollama_base_url: str,
+    models: list[str],
+    prompt: str | None = None,
+) -> dict[str, Any]:
     errors: list[str] = []
     last_result: dict[str, Any] | None = None
     for model in models:
@@ -415,6 +440,7 @@ async def _describe_with_fallbacks(*, image_b64: str, ollama_base_url: str, mode
             image_b64=image_b64,
             ollama_base_url=ollama_base_url,
             model=model,
+            prompt=prompt,
         )
         last_result = result
         if result.get("description"):
@@ -433,10 +459,16 @@ async def _describe_with_fallbacks(*, image_b64: str, ollama_base_url: str, mode
     return last_result
 
 
-async def _describe_image(*, image_b64: str, ollama_base_url: str, model: str) -> dict[str, Any]:
+async def _describe_image(
+    *,
+    image_b64: str,
+    ollama_base_url: str,
+    model: str,
+    prompt: str | None = None,
+) -> dict[str, Any]:
     payload = {
         "model": model,
-        "prompt": _vision_prompt_for_model(model),
+        "prompt": prompt or _vision_prompt_for_model(model),
         "images": [image_b64],
         "stream": False,
         "options": {"temperature": 0.15, "num_predict": 110},

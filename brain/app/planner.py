@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import httpx
 
@@ -8,6 +9,10 @@ from .personality import CHARACTER, clean_say_text, is_forbidden_speech, time_co
 from .safety import SAFE_ANIMATION_ALIASES, safety_filter
 from .memory import memory_context
 from .schemas import Action, ActionList, PlanRequest, PlanResponse, SayAction, StopAction
+
+OLLAMA_PLAN_TIMEOUT_SECONDS = float(os.getenv("VECTOR_OLLAMA_PLAN_TIMEOUT_SECONDS", "180"))
+OLLAMA_REPLY_TIMEOUT_SECONDS = float(os.getenv("VECTOR_OLLAMA_REPLY_TIMEOUT_SECONDS", "120"))
+OLLAMA_KEEP_ALIVE = os.getenv("VECTOR_OLLAMA_KEEP_ALIVE", "15m")
 
 
 # ── SYSTEM PROMPT ──────────────────────────────────────────────────────────────
@@ -154,9 +159,10 @@ async def create_plan(
         "prompt": f"{SYSTEM}\n\n{prompt}",
         "format": "json",
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0.38, "num_predict": 280},
     }
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=OLLAMA_PLAN_TIMEOUT_SECONDS) as client:
         response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
         response.raise_for_status()
 
@@ -268,10 +274,11 @@ async def create_reply_text(req: PlanRequest, *, model: str, ollama_base_url: st
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0.55, "num_predict": 80},
     }
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_REPLY_TIMEOUT_SECONDS) as client:
             response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
             response.raise_for_status()
         text = (response.json().get("response") or "").strip()
@@ -387,10 +394,11 @@ async def _create_plain_reply_text(
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0.5, "num_predict": 40},
     }
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_REPLY_TIMEOUT_SECONDS) as client:
             response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
             response.raise_for_status()
         text = (response.json().get("response") or "").strip()

@@ -875,3 +875,10 @@ Line 12: "Keep it under 3 actions and end with stop."
 - ConversationSession handles IDLE -> ENGAGED -> THINKING -> SPEAKING -> ENGAGED -> COOLDOWN -> IDLE, strips wake words, detects local exit phrases, uses explicit-command gating for motion, and times out after silence.
 - Dry-run smoke test: `/wirepod/transcript` with `Hey Pip, what is my name?` started a session, answered Rob's name, and returned to IDLE on silence timeout.
 - Per the spec, autonomy/sentinel suppression steps were not implemented yet; test steps 1-4 more before adding suppression polish.
+
+### 2026-05-15 session 3 (Codex)
+- Added external validation camera support for `Logi C615 HD WebCam` using ffmpeg/DirectShow. New routes: `/external-camera/status`, `/external-camera/capture`, `/external-camera/latest.jpg`, `/validation/pip-area`.
+- Added `/validation/gemma-control`: captures an external before-frame, asks Gemma for a safe visible command, executes through `vector-sdk`, captures after-frame, and validates using robot telemetry plus external image delta.
+- Real validation passed for a head-motion command: Gemma planned `head -> 35`, SDK executed, external camera saw Pip/cube/dock, telemetry changed, and image delta confirmed physical change. The SDK still reports `TimeoutError()` on some head futures even when motion succeeds; treat this as a warning to monitor.
+- Planner timeout increased and Ollama `keep_alive` added to survive cold loading after vision models. External camera validation now prefers `llava:7b` over `moondream` and uses a prompt that detects Pip when partially visible at the frame edge.
+- Research direction: keep following a SayCan-like architecture for Pip: Gemma proposes high-level actions, local affordance/safety scoring decides what is feasible, and external camera/robot telemetry closes the loop. RT-2/VLA work is inspiration for the long-term shape, but the practical next step is not end-to-end policy training; it is accumulating validated perception-action episodes and scoring action success.

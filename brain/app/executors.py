@@ -118,7 +118,7 @@ class VectorSdkExecutor:
                             num_retries=0,
                         )
                         next_action_id += 1
-                        robot.conn.run_coroutine(robot.conn.grpc_interface.SetHeadAngle(req)).result(timeout=8)
+                        robot.conn.run_coroutine(robot.conn.grpc_interface.SetHeadAngle(req)).result(timeout=15)
                     elif action.type == "lift":
                         lift_heights_mm = {"low": 32.0, "medium": 62.0, "high": 92.0}
                         req = protocol.SetLiftHeightRequest(
@@ -130,7 +130,7 @@ class VectorSdkExecutor:
                             num_retries=0,
                         )
                         next_action_id += 1
-                        robot.conn.run_coroutine(robot.conn.grpc_interface.SetLiftHeight(req)).result(timeout=8)
+                        robot.conn.run_coroutine(robot.conn.grpc_interface.SetLiftHeight(req)).result(timeout=15)
                     elif action.type == "animation":
                         anim = protocol.Animation(name=SAFE_ANIMATION_ALIASES[action.name])
                         req = protocol.PlayAnimationRequest(
