@@ -16,3 +16,6 @@
 - Hardened planner calls with longer Ollama timeouts and `keep_alive` so Gemma survives cold loads and vision-model swaps.
 - Tuned external camera validation to prefer `llava:7b` and use a prompt that detects Pip even when partially visible at the frame edge; added delayed DirectShow retries for camera-driver contention.
 - Added `scripts/test-system.ps1` to exercise health, robot state, external camera validation, planner, and dry-run execution from one command.
+- Fixed Conversation Mode reply windows so the local listener starts on wake, drains stale audio, mutes during Pip's own speech, then explicitly reopens after the echo guard instead of timing out early.
+- Added optional external microphone capture through ffmpeg/DirectShow via `VECTOR_AUDIO_INPUT_DEVICE`; validated with `Microphone (Logi C615 HD WebCam)` after Vector's audio feed produced repeated/static frames.
+- Added `/validation/control-suite` with expected-direction checks, plus `/map/status` and `/map/observe` for durable pose + camera observations.

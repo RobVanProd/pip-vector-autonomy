@@ -2,7 +2,8 @@ param(
     [ValidateSet("mock", "vector-sdk-dry-run", "vector-sdk")]
     [string]$Mode = "vector-sdk-dry-run",
     [string]$Serial = "0dd1fb2d",
-    [int]$Port = 8788
+    [int]$Port = 8788,
+    [string]$AudioInputDevice = $env:VECTOR_AUDIO_INPUT_DEVICE
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,9 @@ $env:VECTOR_BRAIN_MODEL = "gemma4:e4b"
 $env:VECTOR_EXECUTION_MODE = $Mode
 $env:VECTOR_SERIAL = $Serial
 $env:VECTOR_VISION_MODEL = "moondream:latest,llava:7b"
+if ($AudioInputDevice) {
+    $env:VECTOR_AUDIO_INPUT_DEVICE = $AudioInputDevice
+}
 
 Write-Host "Starting vector-brain on http://127.0.0.1:$Port in mode $Mode"
 & $python -m uvicorn app.main:app --app-dir $brain --host 127.0.0.1 --port $Port

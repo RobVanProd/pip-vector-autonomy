@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -9,6 +12,7 @@ from typing import Any, AsyncIterator
 
 
 SERVICE_PATH = "/Anki.Vector.external_interface.ExternalInterface/AudioFeed"
+DEFAULT_EXTERNAL_MIC = "Microphone (Logi C615 HD WebCam)"
 
 
 @dataclass(slots=True)
@@ -64,6 +68,8 @@ class AudioCapture:
         self.started_ts: float | None = None
         self.repeated_frame_count = 0
         self.static_signal_detected = False
+        self.source = "vector-audio-feed"
+        self.external_audio_device = os.getenv("VECTOR_AUDIO_INPUT_DEVICE")
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -76,6 +82,8 @@ class AudioCapture:
             "connected": self.connected,
             "serial": self.serial,
             "service_path": SERVICE_PATH,
+            "source": self.source,
+            "external_audio_device": self.external_audio_device,
             "frames_seen": self.frames_seen,
             "signal_bytes_seen": self.signal_bytes_seen,
             "last_frame": self.last_frame.to_dict() if self.last_frame else None,
@@ -96,6 +104,7 @@ class AudioCapture:
         self.last_error = None
         self.repeated_frame_count = 0
         self.static_signal_detected = False
+        self.source = "external-microphone" if self.external_audio_device else "vector-audio-feed"
         self.started_ts = time.time()
         self._thread = threading.Thread(target=self._thread_main, name="vector-audio-capture", daemon=True)
         self._thread.start()
@@ -125,6 +134,10 @@ class AudioCapture:
             self._subscribers.discard(queue)
 
     def _thread_main(self) -> None:
+        if self.external_audio_device:
+            self._external_mic_thread_main(self.external_audio_device)
+            return
+
         try:
             import anki_vector
 
@@ -139,6 +152,67 @@ class AudioCapture:
         except Exception as exc:
             self._call_soon(self._set_error, str(exc))
         finally:
+            self._call_soon(self._set_connected, False)
+
+    def _external_mic_thread_main(self, device_name: str) -> None:
+        ffmpeg = os.getenv("VECTOR_EXTERNAL_CAMERA_FFMPEG") or shutil.which("ffmpeg")
+        if not ffmpeg:
+            self._call_soon(self._set_error, "ffmpeg is not on PATH for external microphone capture")
+            return
+
+        frame_bytes = int(16000 * 0.02 * 2)
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "dshow",
+            "-i",
+            f"audio={device_name}",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "s16le",
+            "pipe:1",
+        ]
+        process: subprocess.Popen | None = None
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._call_soon(self._set_connected, True)
+            robot_time_stamp = 0
+            while not self._should_stop():
+                if process.stdout is None:
+                    break
+                chunk = process.stdout.read(frame_bytes)
+                if not chunk:
+                    break
+                robot_time_stamp += 20
+                self._call_soon(
+                    self._emit_frame,
+                    AudioFrame(
+                        robot_time_stamp=robot_time_stamp,
+                        group_id=0,
+                        signal_power=chunk,
+                        direction_strengths=b"",
+                        source_direction=0,
+                        source_confidence=0,
+                        noise_floor_power=0,
+                        received_ts=time.time(),
+                    ),
+                )
+            if process.poll() is None:
+                process.terminate()
+        except Exception as exc:
+            self._call_soon(self._set_error, str(exc) or repr(exc))
+        finally:
+            if process is not None and process.poll() is None:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
             self._call_soon(self._set_connected, False)
 
     async def _stream_audio_feed(self, conn: Any) -> None:

@@ -183,14 +183,20 @@ def _run_ffmpeg_capture(
             width, height = rgb.size
             with temp_path.open("rb") as handle:
                 image_b64 = base64.b64encode(handle.read()).decode("ascii")
-        temp_path.replace(latest_path)
+        output_path = temp_path
+        try:
+            temp_path.replace(latest_path)
+            output_path = latest_path
+        except OSError:
+            output_path = temp_path
     except Exception as exc:
         _unlink_quietly(temp_path)
         return {"ok": False, "error": f"External camera image validation failed: {exc}", "ts": time.time()}
 
     return {
         "ok": True,
-        "path": str(latest_path),
+        "path": str(output_path),
+        "latest_path": str(latest_path) if latest_path.exists() else None,
         "width": width,
         "height": height,
         "brightness": brightness,
@@ -203,9 +209,9 @@ def _validate_external_view(capture: dict[str, Any], description_result: dict[st
     description = str(description_result.get("description") or "").lower()
     image_ok = bool(capture.get("ok")) and not capture.get("dark_frame") and int(capture.get("width") or 0) >= 320
     vision_ok = bool(description_result.get("description")) and not description_result.get("vision_error")
-    pip_visible = any(word in description for word in ("pip", "vector", "anki", "robot", "toy car", "small car"))
-    dock_visible = any(word in description for word in ("charger", "dock", "charging", "base"))
-    cube_visible = "cube" in description or "block" in description
+    pip_visible = _mentions_present(description, ("pip", "vector", "anki", "robot", "toy car", "small car"))
+    dock_visible = _mentions_present(description, ("charger", "dock", "charging", "base"))
+    cube_visible = _mentions_present(description, ("cube", "block"))
     return {
         "ok": bool(image_ok and vision_ok and pip_visible),
         "image_ok": image_ok,
@@ -245,6 +251,21 @@ def _validation_notes(
     if not notes:
         notes.append("External camera sees Pip's area clearly enough for validation.")
     return notes
+
+
+def _mentions_present(description: str, terms: tuple[str, ...]) -> bool:
+    if not any(term in description for term in terms):
+        return False
+    negations = ("no", "not", "without", "missing", "absent")
+    words = description.replace("/", " ").replace("-", " ").split()
+    for index, word in enumerate(words):
+        cleaned = word.strip(".,;:!?()[]{}'\"")
+        if cleaned not in terms:
+            continue
+        window = words[max(0, index - 4) : index]
+        if any(item.strip(".,;:!?()[]{}'\"") in negations for item in window):
+            return False
+    return True
 
 
 def _remember_external_view(result: dict[str, Any]) -> None:

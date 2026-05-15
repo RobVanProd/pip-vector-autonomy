@@ -15,6 +15,7 @@ from .autonomy import AutonomyLoop
 from .conversation_session import ConversationSession
 from .dashboard import DASHBOARD_HTML
 from .emotion import EmotionEngine
+from .environment_map import load_environment_map, record_environment_observation
 from .events import add_event, list_events
 from .external_camera import (
     LATEST_FILENAME as EXTERNAL_CAMERA_LATEST_FILENAME,
@@ -257,6 +258,139 @@ def _observed_control_change(
     }
 
 
+def _expected_action_confirmation(
+    actions: list[Action],
+    before_snapshot: dict,
+    after_snapshot: dict,
+    observed: dict[str, Any],
+) -> dict[str, Any]:
+    confirmations: list[dict[str, Any]] = []
+    for action in actions:
+        if action.type == "stop":
+            continue
+        if action.type == "head":
+            before = _optional_float_local(before_snapshot.get("head_angle_deg"))
+            after = _optional_float_local(after_snapshot.get("head_angle_deg"))
+            target = float(action.angle_deg)
+            confirmed = _moved_toward_target(before, after, target, minimum_delta=4.0, target_tolerance=10.0)
+            confirmations.append(
+                {
+                    "type": "head",
+                    "target_angle_deg": target,
+                    "before_angle_deg": before,
+                    "after_angle_deg": after,
+                    "confirmed": confirmed,
+                    "method": "head telemetry moved toward target",
+                }
+            )
+        elif action.type == "lift":
+            targets = {"low": 32.0, "medium": 62.0, "high": 92.0}
+            before = _optional_float_local(before_snapshot.get("lift_height_mm"))
+            after = _optional_float_local(after_snapshot.get("lift_height_mm"))
+            target = targets[action.height]
+            confirmed = _moved_toward_target(before, after, target, minimum_delta=3.0, target_tolerance=8.0)
+            confirmations.append(
+                {
+                    "type": "lift",
+                    "target_height": action.height,
+                    "target_height_mm": target,
+                    "before_height_mm": before,
+                    "after_height_mm": after,
+                    "confirmed": confirmed,
+                    "method": "lift telemetry moved toward target",
+                }
+            )
+        elif action.type == "turn":
+            delta = _optional_float_local(observed.get("pose_angle_delta_deg"))
+            expected_sign = 1 if action.degrees > 0 else -1
+            confirmed = delta is not None and abs(delta) >= 4.0 and (1 if delta > 0 else -1) == expected_sign
+            confirmations.append(
+                {
+                    "type": "turn",
+                    "target_degrees": action.degrees,
+                    "pose_angle_delta_deg": delta,
+                    "confirmed": confirmed,
+                    "method": "pose heading changed in expected direction",
+                }
+            )
+        elif action.type == "drive":
+            distance = _pose_distance(before_snapshot.get("pose"), after_snapshot.get("pose"))
+            confirmed = distance is not None and distance >= 8.0
+            confirmations.append(
+                {
+                    "type": "drive",
+                    "target_speed_mmps": action.speed_mmps,
+                    "target_duration_ms": action.duration_ms,
+                    "pose_distance_mm": distance,
+                    "confirmed": confirmed,
+                    "method": "pose position changed enough to distinguish from sensor noise",
+                }
+            )
+        elif action.type in {"animation", "behavior"}:
+            frame_delta = _optional_float_local(observed.get("external_frame_mean_abs_delta"))
+            confirmed = frame_delta is not None and frame_delta >= 3.0
+            confirmations.append(
+                {
+                    "type": action.type,
+                    "name": getattr(action, "name", None),
+                    "external_frame_mean_abs_delta": frame_delta,
+                    "confirmed": confirmed,
+                    "method": "external camera detected visible change",
+                }
+            )
+        elif action.type == "say":
+            confirmations.append(
+                {
+                    "type": "say",
+                    "confirmed": True,
+                    "method": "speech action was accepted by executor; audio validation is not yet implemented",
+                }
+            )
+
+    actionable = [item for item in confirmations if item["type"] != "say"]
+    if not actionable:
+        actionable = confirmations
+    return {
+        "confirmed": bool(actionable and all(item.get("confirmed") for item in actionable)),
+        "checks": confirmations,
+    }
+
+
+def _moved_toward_target(
+    before: float | None,
+    after: float | None,
+    target: float,
+    *,
+    minimum_delta: float,
+    target_tolerance: float,
+) -> bool:
+    if before is None or after is None:
+        return False
+    if abs(after - target) <= target_tolerance:
+        return True
+    before_error = abs(before - target)
+    after_error = abs(after - target)
+    return after_error < before_error and abs(after - before) >= minimum_delta
+
+
+def _pose_distance(before: Any, after: Any) -> float | None:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    try:
+        dx = float(after.get("x")) - float(before.get("x"))
+        dy = float(after.get("y")) - float(before.get("y"))
+        return round((dx * dx + dy * dy) ** 0.5, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float_local(value: Any) -> float | None:
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def _numeric_delta(before: Any, after: Any) -> float | None:
     try:
         return round(float(after) - float(before), 2)
@@ -390,7 +524,7 @@ async def validate_gemma_control(
     )
     before_image = _copy_validation_image(before_capture, "gemma-control-before")
     before_snapshot = await read_robot_snapshot(VECTOR_SERIAL, max_age_seconds=0, allow_cooldown_cache=False)
-    if not _robot_safe_to_command(before_snapshot):
+    if not dry_run and not _robot_safe_to_command(before_snapshot):
         validation = {
             "ok": False,
             "reason": "robot is not in a safe state for physical validation",
@@ -433,6 +567,7 @@ async def validate_gemma_control(
     )
     after_image = _copy_validation_image(after_capture, "gemma-control-after")
     observed = _observed_control_change(before_snapshot, after_snapshot, before_image, after_image)
+    expected = _expected_action_confirmation(safe_actions, before_snapshot, after_snapshot, observed)
     before_camera = before_capture.get("validation") or {}
     after_camera = after_capture.get("validation") or {}
     action_errors = [
@@ -446,6 +581,7 @@ async def validate_gemma_control(
             and after_camera.get("image_ok")
             and execute_response.ok
             and (dry_run or observed["physical_change_detected"])
+            and (dry_run or expected["confirmed"])
         ),
         "dry_run": dry_run,
         "prompt": prompt,
@@ -453,6 +589,7 @@ async def validate_gemma_control(
         "denied_actions": denied_actions,
         "action_errors": action_errors,
         "observed": observed,
+        "expected": expected,
         "external_camera_before": before_camera,
         "external_camera_after": after_camera,
     }
@@ -476,6 +613,78 @@ async def validate_gemma_control(
         "after_state": after_snapshot,
         "validation": validation,
     }
+
+
+@app.post("/validation/control-suite")
+async def validate_control_suite(
+    dry_run: bool = True,
+    include_turn: bool = False,
+    include_drive: bool = False,
+):
+    prompts = [
+        "Validation only: move your head up to 35 degrees, then stop. Do not drive.",
+        "Validation only: move your head down to -10 degrees, then stop. Do not drive.",
+        "Validation only: raise your lift high, then stop. Do not drive.",
+        "Validation only: lower your lift low, then stop. Do not drive.",
+    ]
+    if include_turn:
+        prompts.extend(
+            [
+                "Validation only: turn left 20 degrees, then stop. Do not drive forward.",
+                "Validation only: turn right 20 degrees, then stop. Do not drive forward.",
+            ]
+        )
+    if include_drive:
+        prompts.append("Validation only: drive forward very slowly for half a second, then stop.")
+
+    results = []
+    for prompt in prompts:
+        result = await validate_gemma_control(
+            prompt=prompt,
+            dry_run=dry_run,
+            allow_drive=include_drive,
+        )
+        results.append(result)
+        await asyncio.sleep(1.0)
+
+    validations = [item.get("validation", {}) for item in results if isinstance(item, dict)]
+    ok = bool(validations and all(item.get("ok") for item in validations))
+    response = {"ok": ok, "dry_run": dry_run, "results": results}
+    add_event("control_suite_validation", {"ok": ok, "dry_run": dry_run, "count": len(results)})
+    return response
+
+
+@app.get("/map/status")
+async def map_status():
+    return load_environment_map(CAPTURE_DIR)
+
+
+@app.post("/map/observe")
+async def map_observe(note: str | None = None, include_robot_camera: bool = False):
+    robot_snapshot = await read_robot_snapshot(VECTOR_SERIAL, max_age_seconds=0, allow_cooldown_cache=False)
+    external_view = await capture_external_view(
+        output_dir=CAPTURE_DIR,
+        ollama_base_url=OLLAMA_BASE_URL,
+        model=EXTERNAL_CAMERA_VISION_MODEL,
+        describe=True,
+    )
+    robot_view = None
+    if include_robot_camera:
+        robot_view = await capture_and_describe_view(
+            VECTOR_SERIAL,
+            ollama_base_url=OLLAMA_BASE_URL,
+            model=VISION_MODEL,
+            output_dir=CAPTURE_DIR,
+        )
+    data = record_environment_observation(
+        CAPTURE_DIR,
+        robot_state=robot_snapshot,
+        external_view=external_view,
+        robot_view=robot_view,
+        note=note,
+    )
+    add_event("map_observation", {"summary": data.get("summary"), "note": note})
+    return data
 
 
 @app.get("/vision/status", response_model=VisionStatus)

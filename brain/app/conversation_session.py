@@ -18,6 +18,7 @@ from .schemas import (
     ConversationSessionConfig,
     ConversationSessionStatus,
     ExecuteRequest,
+    ListenerConfig,
     PlanRequest,
     RobotState,
     SayAction,
@@ -94,6 +95,7 @@ class ConversationSession:
 
         self._lock = asyncio.Lock()
         self._listen_task: asyncio.Task | None = None
+        self._echo_guard_s = 1.2
 
     def status(self) -> ConversationSessionStatus:
         return ConversationSessionStatus(
@@ -148,7 +150,8 @@ class ConversationSession:
                 self.last_action_summary = None
                 self.last_error = None
                 self.state = ConversationState.ENGAGED
-                self._drain_listener_pending()
+                await self._ensure_listener_enabled()
+                await self._drain_listener_pending()
                 self._start_listen_loop()
                 try:
                     self.emotion_engine.force_state("EXCITED", reason="conversation engaged")
@@ -224,6 +227,7 @@ class ConversationSession:
             self.state = ConversationState.SPEAKING
             execute_response = None
             if execute_actions:
+                self._mute_listener_for_speech(plan.actions)
                 executor = get_executor(self.execution_mode, serial=self.vector_serial)
                 execute_response = await executor.execute(
                     ExecuteRequest(actions=plan.actions, robot_state=robot_state, dry_run=dry_run_actions)
@@ -268,8 +272,9 @@ class ConversationSession:
                 pass
         finally:
             if self.state != ConversationState.IDLE:
-                self.state = ConversationState.ENGAGED
-                self.last_activity = time.time()
+                await self._arm_reply_window()
+                if self.state != ConversationState.IDLE:
+                    self.state = ConversationState.ENGAGED
                 self._start_listen_loop()
 
     async def _cooldown(self, reason: str, *, say_goodbye: bool) -> None:
@@ -318,18 +323,59 @@ class ConversationSession:
             return None
         return await self.listener.pop_pending()
 
-    def _drain_listener_pending(self) -> None:
+    async def _drain_listener_pending(self) -> None:
         if self.listener is None:
             return
+        drained = 0
+        while await self.listener.pop_pending():
+            drained += 1
+        if drained:
+            add_event("conversation_listen_drain", {"drained": drained})
 
-        async def drain() -> None:
-            drained = 0
-            while await self.listener.pop_pending():
-                drained += 1
-            if drained:
-                add_event("conversation_listen_drain", {"drained": drained})
+    async def _ensure_listener_enabled(self) -> None:
+        if self.listener is None or self.listener.config.enabled:
+            return
+        config = self.listener.config.model_copy(
+            update={
+                "enabled": True,
+                "auto_route": False,
+                "execute": False,
+                "dry_run": True,
+            }
+        )
+        if isinstance(config, ListenerConfig):
+            status = await self.listener.start(config)
+            add_event("conversation_listener_start", status.model_dump())
 
-        asyncio.create_task(drain())
+    def _mute_listener_for_speech(self, actions: list[Action]) -> None:
+        if self.listener is None:
+            return
+        words = sum(len(action.text.split()) for action in actions if action.type == "say")
+        if words <= 0:
+            return
+        speech_s = max(1.5, min(10.0, words / 2.4 + self._echo_guard_s))
+        self.listener.mute_for(speech_s)
+        add_event("conversation_listener_echo_guard", {"seconds": round(speech_s, 2), "words": words})
+
+    async def _arm_reply_window(self) -> None:
+        await self._ensure_listener_enabled()
+        if self.listener is not None:
+            muted_until = self.listener.muted_until
+            if muted_until is not None:
+                remaining = muted_until - time.time()
+                if remaining > 0:
+                    await asyncio.sleep(min(remaining, 10.0))
+            self.listener.muted_until = None
+            await self._drain_listener_pending()
+        self.last_activity = time.time()
+        add_event(
+            "conversation_reply_window_open",
+            {
+                "session_id": self.session_id,
+                "silence_timeout_s": self.config.silence_timeout_s,
+                "listener_enabled": bool(self.listener and self.listener.config.enabled),
+            },
+        )
 
     async def _robot_state(self) -> RobotState:
         snapshot = await read_robot_snapshot(self.vector_serial)
