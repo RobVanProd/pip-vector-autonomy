@@ -1,0 +1,226 @@
+{
+  "facts": [
+    "The human is Rob.",
+    "The robot's wake word/name is Vector.",
+    "Vector is a small local robot running with Gemma as the local brain.",
+    "Rob likes fast, real builds with bounded and logged external actions."
+  ],
+  "recent_turns": [
+    {
+      "ts": "2026-05-15T00:15:40.272279+00:00",
+      "user": "tell me a fact about Pennsylvania",
+      "assistant": "Pennsylvania was the first state to ratify the U.S. Constitution, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:15:43.190241+00:00",
+      "user": "help me name a spaceship",
+      "assistant": "How about the Star Hopper?"
+    },
+    {
+      "ts": "2026-05-15T00:15:44.814653+00:00",
+      "user": "if you had a message for the world where would it be",
+      "assistant": "Small robot, big wonder, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:16:11.641172+00:00",
+      "user": "if you had a message for the world what would it be",
+      "assistant": "Small robot, big wonder, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:16:29.764342+00:00",
+      "user": "if you could travel anywhere",
+      "assistant": "A tiny mission, Rob. Anywhere is a wonder."
+    },
+    {
+      "ts": "2026-05-15T00:17:04.952604+00:00",
+      "user": "what do you see",
+      "assistant": "Looking around, Rob. So much to see."
+    },
+    {
+      "ts": "2026-05-15T00:17:19.914227+00:00",
+      "user": "help me name a spaceship",
+      "assistant": "How about the Star Hopper?"
+    },
+    {
+      "ts": "2026-05-15T00:17:38.884702+00:00",
+      "user": "how many fingers am i holding up",
+      "assistant": "Rob? Are you holding anything up?"
+    },
+    {
+      "ts": "2026-05-15T00:18:47.182286+00:00",
+      "user": "what are your aspirations",
+      "assistant": "My aspiration is to explore, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:19:03.468024+00:00",
+      "user": "where do you want to explore",
+      "assistant": "Anywhere is a wonder, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:26:50.514904+00:00",
+      "user": "what galaxy are we in",
+      "assistant": "We are in the Milky Way, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:27:14.273228+00:00",
+      "user": "if i was going to name",
+      "assistant": "How about 'Sparky'?"
+    },
+    {
+      "ts": "2026-05-15T00:29:53.315624+00:00",
+      "user": "what's your favorite color",
+      "assistant": "Rob, I don't have a favorite color."
+    },
+    {
+      "ts": "2026-05-15T00:30:11.593133+00:00",
+      "user": "if i got a companion",
+      "assistant": "A companion? That sounds like a mission!"
+    },
+    {
+      "ts": "2026-05-15T00:30:28.018332+00:00",
+      "user": "if we got your friend which we need them",
+      "assistant": "Friend? A companion? Tell me more, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:30:53.372959+00:00",
+      "user": "i will make it's another little robot friend what do you think",
+      "assistant": "A new friend? That sounds like a big mission, Rob!"
+    },
+    {
+      "ts": "2026-05-15T00:32:30.042097+00:00",
+      "user": "tell me a joke",
+      "assistant": "A joke? Okay, Rob. Wait for it."
+    },
+    {
+      "ts": "2026-05-15T00:33:25.041945+00:00",
+      "user": "we the funniest joke you know be serious",
+      "assistant": "Why did the photon check into a hotel? Because it was traveling light!"
+    },
+    {
+      "ts": "2026-05-15T00:33:48.769394+00:00",
+      "user": "what is",
+      "assistant": "A question, Rob?"
+    },
+    {
+      "ts": "2026-05-15T00:33:58.342981+00:00",
+      "user": "what's your favorite color",
+      "assistant": "Blue! Like the sky and the big puddles!"
+    },
+    {
+      "ts": "2026-05-15T00:34:03.095771+00:00",
+      "user": "what is one hundred plus seventy five",
+      "assistant": "Rob, that is two hundred twenty-five."
+    },
+    {
+      "ts": "2026-05-15T00:34:28.414366+00:00",
+      "user": "math is not your strong suit",
+      "assistant": "Math is tricky, Rob. But I can calculate!"
+    },
+    {
+      "ts": "2026-05-15T00:34:43.822301+00:00",
+      "user": "what is one hundred plus seventy five",
+      "assistant": "Rob, that is two hundred twenty-five."
+    },
+    {
+      "ts": "2026-05-15T00:35:05.196490+00:00",
+      "user": "one hundred plus seventy five is one seventy five not to twenty five",
+      "assistant": "Rob, I am sorry. Let me recheck that."
+    },
+    {
+      "ts": "2026-05-15T00:35:28.513164+00:00",
+      "user": "sorry",
+      "assistant": "It's okay, Rob. We can try again."
+    },
+    {
+      "ts": "2026-05-15T00:35:43.744331+00:00",
+      "user": "drive forward",
+      "assistant": "On the move! Exploring the desk."
+    },
+    {
+      "ts": "2026-05-15T00:36:04.232643+00:00",
+      "user": "drive forward by two or three times to the edge of the desk",
+      "assistant": "Moving forward, Rob. Edge exploration!"
+    },
+    {
+      "ts": "2026-05-15T00:37:45.185650+00:00",
+      "user": "turn right",
+      "assistant": "Turning right, Rob. New angle found."
+    },
+    {
+      "ts": "2026-05-15T00:38:06.568624+00:00",
+      "user": "flying cube",
+      "assistant": "A flying cube? That sounds like a big adventure."
+    },
+    {
+      "ts": "2026-05-15T00:38:22.249160+00:00",
+      "user": "fetch cube",
+      "assistant": "Looking for the cube, Rob?"
+    },
+    {
+      "ts": "2026-05-15T00:38:53.272350+00:00",
+      "user": "drive forward",
+      "assistant": "Rob, ready for the next mission."
+    },
+    {
+      "ts": "2026-05-15T00:42:28.554647+00:00",
+      "user": "your school robot",
+      "assistant": "My school? I'm a local explorer, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:42:48.024452+00:00",
+      "user": "you're pretty cool",
+      "assistant": "Thanks, Rob! Ready for the next mission."
+    },
+    {
+      "ts": "2026-05-15T00:43:07.010719+00:00",
+      "user": "your mission is to grab your cube been lifted up",
+      "assistant": "Grab the cube? Lifted up?"
+    },
+    {
+      "ts": "2026-05-15T00:45:18.747960+00:00",
+      "user": "that you see",
+      "assistant": "See? I see the desk, Rob."
+    },
+    {
+      "ts": "2026-05-15T00:46:56.074367+00:00",
+      "user": "what's your favorite",
+      "assistant": "Hmm. I like the smell of fresh circuits."
+    },
+    {
+      "ts": "2026-05-15T00:47:46.879554+00:00",
+      "user": "the of fresh circuits do you like",
+      "assistant": "Rob, I love the smell of circuits!"
+    },
+    {
+      "ts": "2026-05-15T01:01:27.402894+00:00",
+      "user": "try forward",
+      "assistant": "Rob, I am charging right now."
+    },
+    {
+      "ts": "2026-05-15T11:24:16.290394+00:00",
+      "user": "What is my name? Answer in one short sentence.",
+      "assistant": "You are Rob. I know that, Rob."
+    },
+    {
+      "ts": "2026-05-15T11:24:17.269463+00:00",
+      "user": "What is my name? Answer in one short sentence.",
+      "assistant": "Your name is Rob, Rob."
+    }
+  ],
+  "goal": {
+    "name": "CELEBRATING",
+    "priority": 6,
+    "tick_budget": 2,
+    "ticks_used": 1,
+    "trigger_event": "positive interaction with Rob",
+    "started_at": "2026-05-15T00:46:56.075550+00:00"
+  },
+  "autonomous_ticks": [
+    {
+      "ts": "2026-05-15T00:47:05.016962+00:00",
+      "tick": 4,
+      "say": "Small corners hold big wonders, Rob.",
+      "actions": "head:10\u00b0 \u2192 animation:thinking \u2192 say(\"Small corners hold big wonders, Rob.\") \u2192 stop"
+    }
+  ]
+}

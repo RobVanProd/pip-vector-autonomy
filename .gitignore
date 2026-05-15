@@ -1,0 +1,20 @@
+﻿# Local/runtime artifacts
+.venv/
+__pycache__/
+*.pyc
+*.log
+logs/
+downloads/
+captures/
+brain/captures/
+brain/runtime-uvicorn*.log
+runtime/chipper/
+personality/voice-reference/
+voice-lab/reference-clean.wav
+voice-lab/reference-pip-fx-demo.wav
+
+# Secrets and local config
+.env
+.env.*
+*.key
+*.crt

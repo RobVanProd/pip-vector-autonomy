@@ -1,0 +1,19 @@
+﻿services:
+  vector-brain:
+    build: ./brain
+    container_name: vector-brain
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      VECTOR_BRAIN_MODEL: "gemma4:e4b"
+      VECTOR_EXECUTION_MODE: "mock"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
