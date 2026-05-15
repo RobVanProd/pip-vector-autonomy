@@ -241,6 +241,33 @@ class ListenerConfig(BaseModel):
     mute_after_route_seconds: float = Field(default=5.0, ge=0.0, le=30.0)
 
 
+class ConversationSessionConfig(BaseModel):
+    enabled: bool = True
+    execute: bool = True
+    dry_run: bool = False
+    silence_timeout_s: float = Field(default=8.0, ge=2.0, le=60.0)
+    cue_probability: float = Field(default=0.15, ge=0.0, le=1.0)
+    goodbye_probability: float = Field(default=0.20, ge=0.0, le=1.0)
+    allow_motion: bool = True
+    require_explicit_command_for_motion: bool = True
+
+
+class ConversationSessionStatus(BaseModel):
+    enabled: bool
+    state: str
+    session_id: str | None = None
+    turns: int = 0
+    engaged_at: float | None = None
+    last_activity: float | None = None
+    last_action_summary: str | None = None
+    last_error: str | None = None
+    silence_timeout_s: float
+    cue_probability: float
+    goodbye_probability: float
+    allow_motion: bool
+    require_explicit_command_for_motion: bool
+
+
 class SentinelConfig(BaseModel):
     enabled: bool = False
     dry_run: bool = True

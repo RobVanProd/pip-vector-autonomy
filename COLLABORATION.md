@@ -868,3 +868,10 @@ Line 12: "Keep it under 3 actions and end with stop."
 - Extended `robot_io.py` — `_read_robot_snapshot_sync` now populates `face_detected` / `cube_detected` from SDK
 - Wired `autonomy.py` — emotion + goal engines update each tick; fragments injected into idle prompt; speak bias applied; `goal_engine.tick_used()` called post-tick
 - Wired `main.py` — shared `emotion_engine` + `goal_engine` singletons; `Sentinel` instantiated; 6 new routes: `/emotion/state`, `/emotion/set`, `/goals/state`, `/goals/set`, `/sentinel/status`, `/sentinel/start`, `/sentinel/stop`; `goal_engine.notify_positive_interaction()` fires after each successful chat turn
+
+### 2026-05-15 session 2 (Codex)
+- Published a clean public no-license snapshot to `https://github.com/RobVanProd/pip-vector-autonomy`, excluding local-only runtime binaries, logs, captures, downloads, venvs, and voice-reference files.
+- Implemented Conversation Mode MVP through step 4 of the design spec: added `conversation_session.py`, `ConversationSessionConfig`, `ConversationSessionStatus`, `/conversation/status`, `/conversation/config`, `/conversation/reset`, WirePod first-turn routing, voice bridge delegation, and listener pending polling while engaged.
+- ConversationSession handles IDLE -> ENGAGED -> THINKING -> SPEAKING -> ENGAGED -> COOLDOWN -> IDLE, strips wake words, detects local exit phrases, uses explicit-command gating for motion, and times out after silence.
+- Dry-run smoke test: `/wirepod/transcript` with `Hey Pip, what is my name?` started a session, answered Rob's name, and returned to IDLE on silence timeout.
+- Per the spec, autonomy/sentinel suppression steps were not implemented yet; test steps 1-4 more before adding suppression polish.

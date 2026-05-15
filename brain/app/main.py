@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from .audio_capture import AudioCapture
 from .autonomy import AutonomyLoop
+from .conversation_session import ConversationSession
 from .dashboard import DASHBOARD_HTML
 from .emotion import EmotionEngine
 from .events import add_event, list_events
@@ -30,6 +31,8 @@ from .schemas import (
     AutonomyStatus,
     BehaviorAction,
     ChatRequest,
+    ConversationSessionConfig,
+    ConversationSessionStatus,
     DriveAction,
     ExecuteRequest,
     ExecuteResponse,
@@ -101,6 +104,15 @@ vision_loop = VisionLoop(
 )
 audio_capture = AudioCapture(serial=VECTOR_SERIAL)
 listener = Listener(audio_capture=audio_capture, capture_dir=CAPTURE_DIR)
+conversation_session = ConversationSession(
+    model=MODEL,
+    ollama_base_url=OLLAMA_BASE_URL,
+    execution_mode=EXECUTION_MODE,
+    vector_serial=VECTOR_SERIAL,
+    emotion_engine=emotion_engine,
+    goal_engine=goal_engine,
+    listener=listener,
+)
 background_tasks: set[asyncio.Task] = set()
 
 
@@ -252,6 +264,8 @@ async def listener_status():
 
 @app.post("/listener/start", response_model=ListenerStatus)
 async def listener_start(req: ListenerConfig):
+    if conversation_session.config.enabled:
+        req = req.model_copy(update={"auto_route": False})
     status = await listener.start(req)
     add_event("listener", {"status": "started", **status.model_dump()})
     return status
@@ -385,14 +399,37 @@ async def _route_listener_transcript(text: str, payload: dict, config: ListenerC
             "utterance": payload,
         },
     )
-    return await _run_chat(
-        ChatRequest(user_text=text, execute=config.execute, dry_run=config.dry_run),
-        event_kind="listener_chat",
-        source={"listener": payload},
-    )
+    if conversation_session.is_active():
+        return await conversation_session.on_transcript(text, payload)
+    if config.auto_route:
+        return await _run_chat(
+            ChatRequest(user_text=text, execute=config.execute, dry_run=config.dry_run),
+            event_kind="listener_chat",
+            source={"listener": payload},
+        )
+    return {"ignored": True, "reason": "listener auto_route disabled and conversation idle"}
 
 
 listener.route_callback = _route_listener_transcript
+
+
+@app.get("/conversation/status", response_model=ConversationSessionStatus)
+async def conversation_status():
+    return conversation_session.status()
+
+
+@app.post("/conversation/config", response_model=ConversationSessionStatus)
+async def conversation_config(req: ConversationSessionConfig):
+    status = conversation_session.update_config(req)
+    add_event("conversation_config", status.model_dump())
+    return status
+
+
+@app.post("/conversation/reset", response_model=ConversationSessionStatus)
+async def conversation_reset(reason: str = "manual reset"):
+    status = await conversation_session.reset(reason)
+    add_event("conversation_reset", {"reason": reason, "status": status.model_dump()})
+    return status
 
 
 async def _autonomy_listen_callback() -> None:
@@ -458,6 +495,12 @@ async def _autonomy_listen_callback() -> None:
 autonomy.listen_callback = _autonomy_listen_callback
 sentinel.listen_callback = _autonomy_listen_callback
 voice_bridge.listen_callback = _autonomy_listen_callback
+voice_bridge.wake_callback = lambda text, payload, dry_run, execute: conversation_session.on_wake_word(
+    text,
+    payload,
+    execute=execute,
+    dry_run=dry_run,
+)
 
 
 def _start_background_task(coro) -> None:
@@ -472,7 +515,17 @@ async def wirepod_transcript(req: WirePodTranscriptRequest):
     payload = req.model_dump()
     payload["text"] = text
     add_event("wirepod_transcript", payload)
-    _start_background_task(_route_wirepod_transcript(text, payload, req))
+    if conversation_session.config.enabled:
+        _start_background_task(
+            conversation_session.on_wake_word(
+                text,
+                payload,
+                execute=req.execute,
+                dry_run=req.dry_run,
+            )
+        )
+    else:
+        _start_background_task(_route_wirepod_transcript(text, payload, req))
     return {"ok": True, "queued": True}
 
 

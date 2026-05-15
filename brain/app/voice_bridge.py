@@ -35,6 +35,7 @@ class VoiceBridge:
         # config.listen_after_speech=True — opens the Whisper reply window
         # so Rob can respond and Gemma handles the turn conversationally.
         self.listen_callback: Callable[[], Awaitable[None]] | None = None
+        self.wake_callback: Callable[[str, dict, bool, bool], Awaitable[dict]] | None = None
 
     def status(self) -> VoiceBridgeStatus:
         return VoiceBridgeStatus(
@@ -126,6 +127,11 @@ class VoiceBridge:
     async def _handle_intent(self, payload: dict) -> None:
         try:
             text = _intent_to_prompt(payload)
+            if self.wake_callback is not None:
+                await self.wake_callback(text, payload, self.config.dry_run, True)
+                self.last_error = None
+                return
+
             snapshot = await read_robot_snapshot(self.vector_serial)
             robot_state = snapshot_to_robot_state(snapshot)
             plan = await create_conversation_plan(
