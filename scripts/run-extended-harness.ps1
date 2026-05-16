@@ -96,9 +96,14 @@ Write-Jsonl "harness.start" @{
 
 Invoke-Tracked "health" "GET" "/health" | Out-Null
 Invoke-Tracked "llm_warmup" "POST" "/llm/warmup" | Out-Null
-$existingEvents = Invoke-Tracked "events.baseline" "GET" "/events?limit=200"
-if ($existingEvents -and $existingEvents.events) {
-    $lastEventId = ($existingEvents.events | Measure-Object -Property id -Maximum).Maximum
+try {
+    $existingEvents = Invoke-RestMethod "$BaseUrl/events?limit=50" -TimeoutSec 20
+    if ($existingEvents -and $existingEvents.events) {
+        $lastEventId = ($existingEvents.events | Measure-Object -Property id -Maximum).Maximum
+        Write-Jsonl "events.baseline" @{ last_event_id = $lastEventId; count = @($existingEvents.events).Count }
+    }
+} catch {
+    Write-Jsonl "events.baseline.error" @{ error = $_.Exception.Message }
 }
 
 while ((Get-Date) -lt $deadline) {
@@ -114,7 +119,19 @@ while ((Get-Date) -lt $deadline) {
         Invoke-Tracked "status.autonomy" "GET" "/autonomy/status" | Out-Null
         Invoke-Tracked "status.sentinel" "GET" "/sentinel/status" | Out-Null
         Invoke-Tracked "status.vision" "GET" "/vision/status" | Out-Null
-        $events = Invoke-Tracked "events.raw" "GET" "/events?limit=200"
+        try {
+            $eventsSw = [Diagnostics.Stopwatch]::StartNew()
+            $events = Invoke-RestMethod "$BaseUrl/events?limit=50" -TimeoutSec 20
+            $eventsSw.Stop()
+            Write-Jsonl "events.poll" @{
+                elapsed_ms = [math]::Round($eventsSw.Elapsed.TotalMilliseconds, 1)
+                returned = @($events.events).Count
+                last_event_id = if ($events.events) { ($events.events | Measure-Object -Property id -Maximum).Maximum } else { $lastEventId }
+            }
+        } catch {
+            Write-Jsonl "events.poll.error" @{ error = $_.Exception.Message }
+            $events = $null
+        }
         if ($events -and $events.events) {
             $newEvents = @($events.events | Where-Object { $_.id -gt $lastEventId })
             if ($newEvents.Count -gt 0) {
