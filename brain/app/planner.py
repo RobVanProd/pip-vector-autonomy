@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import httpx
 
@@ -13,6 +14,8 @@ from .schemas import Action, ActionList, PlanRequest, PlanResponse, SayAction, S
 OLLAMA_PLAN_TIMEOUT_SECONDS = float(os.getenv("VECTOR_OLLAMA_PLAN_TIMEOUT_SECONDS", "180"))
 OLLAMA_REPLY_TIMEOUT_SECONDS = float(os.getenv("VECTOR_OLLAMA_REPLY_TIMEOUT_SECONDS", "120"))
 OLLAMA_KEEP_ALIVE = os.getenv("VECTOR_OLLAMA_KEEP_ALIVE", "15m")
+OLLAMA_PLAN_NUM_PREDICT = int(os.getenv("VECTOR_OLLAMA_PLAN_NUM_PREDICT", "180"))
+OLLAMA_REPLY_NUM_PREDICT = int(os.getenv("VECTOR_OLLAMA_REPLY_NUM_PREDICT", "60"))
 
 
 # ── SYSTEM PROMPT ──────────────────────────────────────────────────────────────
@@ -149,24 +152,28 @@ async def create_plan(
 ) -> PlanResponse:
     prompt = (
         f"{time_context()}\n"
-        f"Memory and context:\n{memory_context()}\n\n"
+        f"Memory and context:\n{memory_context(max_turns=3, max_facts=12)}\n\n"
         f"Robot state JSON: {req.robot_state.model_dump_json(exclude_none=True)}\n"
         f"Input: {req.user_text}\n"
         "Return JSON plan now."
     )
+    started = time.perf_counter()
     payload = {
         "model": model,
         "prompt": f"{SYSTEM}\n\n{prompt}",
         "format": "json",
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {"temperature": 0.38, "num_predict": 280},
+        "options": {"temperature": 0.32, "num_predict": OLLAMA_PLAN_NUM_PREDICT},
     }
+    http_started = time.perf_counter()
     async with httpx.AsyncClient(timeout=OLLAMA_PLAN_TIMEOUT_SECONDS) as client:
         response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
         response.raise_for_status()
+    http_elapsed_ms = round((time.perf_counter() - http_started) * 1000, 1)
 
-    raw = response.json().get("response", "")
+    data = response.json()
+    raw = data.get("response", "")
     parse_error = None
     try:
         parsed = extract_json(raw)
@@ -188,6 +195,7 @@ async def create_plan(
         safety_notes=notes,
         raw=raw,
         execution_mode=execution_mode,
+        metrics=_ollama_metrics(data, started, http_elapsed_ms=http_elapsed_ms, prompt_chars=len(payload["prompt"])),
     )
 
 
@@ -253,6 +261,7 @@ async def _fallback_conversation_plan(
         safety_notes=safety_notes,
         raw=raw,
         execution_mode=execution_mode,
+        metrics={"fallback": True},
     )
 
 
@@ -275,7 +284,7 @@ async def create_reply_text(req: PlanRequest, *, model: str, ollama_base_url: st
         "prompt": prompt,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {"temperature": 0.55, "num_predict": 80},
+        "options": {"temperature": 0.45, "num_predict": OLLAMA_REPLY_NUM_PREDICT},
     }
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_REPLY_TIMEOUT_SECONDS) as client:
@@ -395,7 +404,7 @@ async def _create_plain_reply_text(
         "prompt": prompt,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {"temperature": 0.5, "num_predict": 40},
+        "options": {"temperature": 0.45, "num_predict": min(40, OLLAMA_REPLY_NUM_PREDICT)},
     }
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_REPLY_TIMEOUT_SECONDS) as client:
@@ -421,3 +430,26 @@ def _local_reply_fallback(user_text: str) -> str:
         "Tiny brain is thinking, Rob.",
     ]
     return random.choice(phrases)
+
+
+def _ollama_metrics(data: dict, started: float, *, http_elapsed_ms: float, prompt_chars: int) -> dict:
+    metrics = {
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+        "http_elapsed_ms": http_elapsed_ms,
+        "prompt_chars": prompt_chars,
+        "done_reason": data.get("done_reason"),
+    }
+    for key in (
+        "total_duration",
+        "load_duration",
+        "prompt_eval_count",
+        "prompt_eval_duration",
+        "eval_count",
+        "eval_duration",
+    ):
+        value = data.get(key)
+        if value is not None:
+            metrics[key] = value
+            if key.endswith("_duration") or key == "total_duration":
+                metrics[f"{key}_ms"] = round(float(value) / 1_000_000, 1)
+    return metrics

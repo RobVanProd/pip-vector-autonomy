@@ -111,6 +111,7 @@ class PlanResponse(BaseModel):
     safety_notes: list[str] = Field(default_factory=list)
     raw: str
     execution_mode: str
+    metrics: dict | None = None
 
 
 class ExecuteRequest(BaseModel):

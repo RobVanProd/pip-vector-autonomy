@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
@@ -76,6 +77,7 @@ EXECUTION_MODE = os.getenv("VECTOR_EXECUTION_MODE", "mock")
 VECTOR_SERIAL = os.getenv("VECTOR_SERIAL")
 VISION_MODEL = os.getenv("VECTOR_VISION_MODEL", "moondream:latest,llava:7b")
 EXTERNAL_CAMERA_VISION_MODEL = os.getenv("VECTOR_EXTERNAL_CAMERA_VISION_MODEL", "llava:7b,moondream:latest")
+MAP_VISION_MODEL = os.getenv("VECTOR_MAP_VISION_MODEL", "moondream:latest")
 CAPTURE_DIR = Path(os.getenv("VECTOR_CAPTURE_DIR", "captures")).resolve()
 
 app = FastAPI(title="Vector Brain", version="0.3.0")
@@ -138,6 +140,7 @@ async def health():
         "vector_serial": VECTOR_SERIAL,
         "vision_model": VISION_MODEL,
         "external_camera_vision_model": EXTERNAL_CAMERA_VISION_MODEL,
+        "map_vision_model": MAP_VISION_MODEL,
     }
 
 
@@ -171,6 +174,77 @@ async def memory_fact(req: MemoryFactRequest):
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(payload: dict):
     return await chat_completion(payload, OLLAMA_BASE_URL, MODEL)
+
+
+@app.post("/llm/warmup")
+async def llm_warmup(model: str | None = None):
+    return await _warm_llm(model=model)
+
+
+async def _warm_llm(model: str | None = None) -> dict:
+    target_model = model or MODEL
+    started = time.perf_counter()
+    payload = {
+        "model": target_model,
+        "prompt": "Return exactly: ok",
+        "stream": False,
+        "keep_alive": os.getenv("VECTOR_OLLAMA_KEEP_ALIVE", "15m"),
+        "options": {"temperature": 0.0, "num_predict": 4},
+    }
+    async with httpx.AsyncClient(timeout=180) as client:
+        response = await client.post(f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate", json=payload)
+        response.raise_for_status()
+    data = response.json()
+    result = {
+        "ok": True,
+        "model": target_model,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+        "response": (data.get("response") or "").strip(),
+        "ollama": {key: data.get(key) for key in (
+            "total_duration",
+            "load_duration",
+            "prompt_eval_count",
+            "prompt_eval_duration",
+            "eval_count",
+            "eval_duration",
+        ) if data.get(key) is not None},
+    }
+    add_event("llm_warmup", result)
+    return result
+
+
+def _schedule_llm_warmup(reason: str) -> None:
+    async def warm() -> None:
+        try:
+            result = await _warm_llm()
+            add_event("llm_rewarm", {"reason": reason, "result": result})
+        except Exception as exc:
+            add_event("llm_rewarm_error", {"reason": reason, "error": str(exc)})
+
+    _start_background_task(warm())
+
+
+@app.post("/diagnostics/latency-sample")
+async def diagnostics_latency_sample(prompt: str = "say hello in five words and stop"):
+    started = time.perf_counter()
+    snapshot = await read_robot_snapshot(VECTOR_SERIAL, max_age_seconds=60, allow_cooldown_cache=True)
+    state = snapshot_to_robot_state(snapshot)
+    plan_response = await create_plan(
+        PlanRequest(user_text=prompt, robot_state=state),
+        model=MODEL,
+        ollama_base_url=OLLAMA_BASE_URL,
+        execution_mode=EXECUTION_MODE,
+    )
+    result = {
+        "ok": True,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+        "actions": [action.model_dump() for action in plan_response.actions],
+        "safety_notes": plan_response.safety_notes,
+        "metrics": plan_response.metrics,
+        "robot_state": state.model_dump(exclude_none=True),
+    }
+    add_event("latency_sample", result)
+    return result
 
 
 async def _live_robot_state(fallback: RobotState) -> RobotState:
@@ -469,6 +543,8 @@ async def external_camera_capture(describe: bool = True):
         model=EXTERNAL_CAMERA_VISION_MODEL,
         describe=describe,
     )
+    if describe:
+        _schedule_llm_warmup("external_camera_capture")
     add_event("external_camera", result)
     return result
 
@@ -489,6 +565,7 @@ async def validate_pip_area():
         model=EXTERNAL_CAMERA_VISION_MODEL,
         describe=True,
     )
+    _schedule_llm_warmup("pip_area_validation")
     robot_snapshot = await read_robot_snapshot(
         VECTOR_SERIAL,
         max_age_seconds=60,
@@ -522,6 +599,7 @@ async def validate_gemma_control(
         model=EXTERNAL_CAMERA_VISION_MODEL,
         describe=True,
     )
+    _schedule_llm_warmup("gemma_control_before_capture")
     before_image = _copy_validation_image(before_capture, "gemma-control-before")
     before_snapshot = await read_robot_snapshot(VECTOR_SERIAL, max_age_seconds=0, allow_cooldown_cache=False)
     if not dry_run and not _robot_safe_to_command(before_snapshot):
@@ -565,6 +643,7 @@ async def validate_gemma_control(
         model=EXTERNAL_CAMERA_VISION_MODEL,
         describe=True,
     )
+    _schedule_llm_warmup("gemma_control_after_capture")
     after_image = _copy_validation_image(after_capture, "gemma-control-after")
     observed = _observed_control_change(before_snapshot, after_snapshot, before_image, after_image)
     expected = _expected_action_confirmation(safe_actions, before_snapshot, after_snapshot, observed)
@@ -665,9 +744,10 @@ async def map_observe(note: str | None = None, include_robot_camera: bool = Fals
     external_view = await capture_external_view(
         output_dir=CAPTURE_DIR,
         ollama_base_url=OLLAMA_BASE_URL,
-        model=EXTERNAL_CAMERA_VISION_MODEL,
+        model=MAP_VISION_MODEL,
         describe=True,
     )
+    _schedule_llm_warmup("map_observe")
     robot_view = None
     if include_robot_camera:
         robot_view = await capture_and_describe_view(
@@ -800,6 +880,7 @@ async def plan(req: PlanRequest):
                 "denied_actions": response.denied_actions,
                 "safety_notes": response.safety_notes,
                 "raw": response.raw,
+                "metrics": response.metrics,
                 "model": response.model,
                 "execution_mode": response.execution_mode,
             },
@@ -871,6 +952,7 @@ async def _run_chat(req: ChatRequest, *, event_kind: str, source: dict | None = 
             "actions": [action.model_dump() for action in plan_response.actions],
             "executed": execute_response.model_dump() if execute_response else None,
             "raw": plan_response.raw,
+            "metrics": plan_response.metrics,
             "source": source,
         },
     )
@@ -1050,6 +1132,7 @@ async def _route_wirepod_transcript(text: str, payload: dict, req: WirePodTransc
                 "actions": [action.model_dump() for action in plan_response.actions],
                 "executed": execute_response.model_dump() if execute_response else None,
                 "raw": plan_response.raw,
+                "metrics": plan_response.metrics,
                 "source": {"wirepod": payload},
             },
         )

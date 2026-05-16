@@ -250,6 +250,7 @@ class ConversationSession:
                     "actions": [action.model_dump() for action in plan.actions],
                     "executed": execute_response.model_dump() if execute_response else None,
                     "raw": plan.raw,
+                    "metrics": plan.metrics,
                     "source": source,
                 },
             )
@@ -396,8 +397,6 @@ class ConversationSession:
             f"Active conversation with Rob, turn {self.turns}.\n"
             f"Session id: {self.session_id}\n"
             f"Last action: {self.last_action_summary or 'none yet'}\n"
-            f"Memory:\n{memory_context(max_turns=6, max_facts=20)}\n\n"
-            f"Robot state JSON: {robot_state.model_dump_json(exclude_none=True)}\n"
             f"Rob's follow-up: {text!r}\n"
             "Continue naturally. You know the context from the last action and memory.\n"
             "Do not narrate what you just did. Do not say setup phrases.\n"

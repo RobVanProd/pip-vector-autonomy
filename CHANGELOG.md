@@ -19,3 +19,5 @@
 - Fixed Conversation Mode reply windows so the local listener starts on wake, drains stale audio, mutes during Pip's own speech, then explicitly reopens after the echo guard instead of timing out early.
 - Added optional external microphone capture through ffmpeg/DirectShow via `VECTOR_AUDIO_INPUT_DEVICE`; validated with `Microphone (Logi C615 HD WebCam)` after Vector's audio feed produced repeated/static frames.
 - Added `/validation/control-suite` with expected-direction checks, plus `/map/status` and `/map/observe` for durable pose + camera observations.
+- Added planner latency metrics from Ollama, `/llm/warmup`, `/diagnostics/latency-sample`, and `scripts/run-extended-harness.ps1` / `scripts/analyze-extended-harness.ps1`.
+- Reduced planner output budget and memory context for faster warm responses; separated routine map vision (`VECTOR_MAP_VISION_MODEL`) from validation vision and rewarm Gemma after vision-heavy calls to avoid model-swap latency spikes.
