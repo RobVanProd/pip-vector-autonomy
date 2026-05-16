@@ -6,6 +6,8 @@ param(
     [int]$WarmupEverySeconds = 600,
     [int]$MapEverySeconds = 900,
     [int]$ControlSuiteEverySeconds = 1200,
+    [switch]$InteractiveLatencyProfile,
+    [switch]$RunControlSuiteAtStart,
     [switch]$SkipMap,
     [switch]$SkipControlSuite,
     [switch]$RealControlSuite,
@@ -13,6 +15,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($InteractiveLatencyProfile) {
+    $SkipControlSuite = $true
+    $SkipMap = $true
+}
 
 if (-not $OutputDir) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -65,8 +72,14 @@ $deadline = (Get-Date).AddMinutes($DurationMinutes)
 $nextStatus = Get-Date
 $nextLatency = Get-Date
 $nextWarmup = Get-Date
-$nextMap = Get-Date
-$nextControl = Get-Date
+$nextMap = if ($SkipMap) { $deadline } else { (Get-Date).AddSeconds([Math]::Min(60, $MapEverySeconds)) }
+$nextControl = if ($SkipControlSuite -or $ControlSuiteEverySeconds -le 0) {
+    $deadline
+} elseif ($RunControlSuiteAtStart) {
+    Get-Date
+} else {
+    (Get-Date).AddSeconds($ControlSuiteEverySeconds)
+}
 $lastEventId = 0
 
 Write-Jsonl "harness.start" @{
@@ -74,10 +87,19 @@ Write-Jsonl "harness.start" @{
     duration_minutes = $DurationMinutes
     output_dir = $OutputDir
     real_control_suite = [bool]$RealControlSuite
+    interactive_latency_profile = [bool]$InteractiveLatencyProfile
+    skip_map = [bool]$SkipMap
+    skip_control_suite = [bool]$SkipControlSuite
+    map_every_seconds = $MapEverySeconds
+    control_suite_every_seconds = $ControlSuiteEverySeconds
 }
 
 Invoke-Tracked "health" "GET" "/health" | Out-Null
 Invoke-Tracked "llm_warmup" "POST" "/llm/warmup" | Out-Null
+$existingEvents = Invoke-Tracked "events.baseline" "GET" "/events?limit=200"
+if ($existingEvents -and $existingEvents.events) {
+    $lastEventId = ($existingEvents.events | Measure-Object -Property id -Maximum).Maximum
+}
 
 while ((Get-Date) -lt $deadline) {
     $now = Get-Date
@@ -125,7 +147,7 @@ while ((Get-Date) -lt $deadline) {
         $nextMap = $now.AddSeconds($MapEverySeconds)
     }
 
-    if (-not $SkipControlSuite -and $now -ge $nextControl) {
+    if (-not $SkipControlSuite -and $ControlSuiteEverySeconds -gt 0 -and $now -ge $nextControl) {
         $dryRun = (-not [bool]$RealControlSuite).ToString().ToLowerInvariant()
         Invoke-Tracked "control_suite" "POST" "/validation/control-suite?dry_run=$dryRun" | Out-Null
         Invoke-Tracked "llm_warmup.after_control_suite" "POST" "/llm/warmup" | Out-Null

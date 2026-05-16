@@ -8,8 +8,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
+from PIL import Image
 
+from .ollama_runtime import ollama_generate
 from .robot_lock import SDK_LOCK
 from .schemas import RobotState
 
@@ -364,7 +365,6 @@ def _capture_view_sync(serial: str, output_dir: Path) -> dict[str, Any]:
 
 def _capture_view_raw_grpc(robot: Any, *, timeout: float) -> Any:
     from anki_vector.messaging import protocol
-    from PIL import Image
 
     async def capture_single_image():
         request = protocol.CaptureSingleImageRequest(enable_high_resolution=False)
@@ -474,10 +474,7 @@ async def _describe_image(
         "options": {"temperature": 0.15, "num_predict": 110},
     }
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(f"{ollama_base_url.rstrip('/')}/api/generate", json=payload)
-            response.raise_for_status()
-            data = response.json()
+        data = await ollama_generate(ollama_base_url, payload, timeout=45)
     except Exception as exc:
         return {
             "ok": True,

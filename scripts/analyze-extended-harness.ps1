@@ -27,6 +27,7 @@ function Stats($Values) {
 $latency = @($rows | Where-Object { $_.kind -eq "latency.sample" })
 $chat = @($rows | Where-Object { $_.kind -eq "chat.sample" })
 $warmups = @($rows | Where-Object { $_.kind -like "llm_warmup*" })
+$rewarmEvents = @()
 $errors = @($rows | Where-Object { $_.kind -like "*.error" })
 $mapRows = @($rows | Where-Object { $_.kind -eq "map.observe" })
 $control = @($rows | Where-Object { $_.kind -eq "control_suite" })
@@ -39,6 +40,7 @@ foreach ($delta in $eventDeltas) {
     foreach ($event in @($delta.payload.events)) {
         if ($event.kind -eq "conversation_reply_window_open") { $conversationWindows++ }
         if ($event.kind -eq "conversation_end") { $conversationEnds++ }
+        if ($event.kind -in @("llm_warmup", "llm_rewarm", "llm_rewarm_skipped")) { $rewarmEvents += $event }
     }
 }
 foreach ($row in @($rows | Where-Object { $_.kind -eq "status.audio" })) {
@@ -56,8 +58,13 @@ $summary = [ordered]@{
     latency_sample_elapsed_ms = Stats ($latency | ForEach-Object { $_.elapsed_ms })
     latency_ollama_total_ms = Stats ($latency | ForEach-Object { $_.payload.metrics.total_duration_ms })
     latency_ollama_load_ms = Stats ($latency | ForEach-Object { $_.payload.metrics.load_duration_ms })
+    latency_cold_loads_over_5s = @($latency | Where-Object { $_.payload.metrics.load_duration_ms -ge 5000 }).Count
+    latency_cold_loads_over_15s = @($latency | Where-Object { $_.payload.metrics.load_duration_ms -ge 15000 }).Count
     chat_sample_elapsed_ms = Stats ($chat | ForEach-Object { $_.elapsed_ms })
+    chat_cold_loads_over_5s = @($chat | Where-Object { $_.payload.plan.metrics.load_duration_ms -ge 5000 -or $_.payload.metrics.load_duration_ms -ge 5000 }).Count
     warmup_elapsed_ms = Stats ($warmups | ForEach-Object { $_.elapsed_ms })
+    rewarm_events_seen = $rewarmEvents.Count
+    rewarm_skipped_seen = @($rewarmEvents | Where-Object { $_.kind -eq "llm_rewarm_skipped" }).Count
     errors = $errors.Count
     map_observations = $mapRows.Count
     map_rows_with_pip_seen = $mapOk

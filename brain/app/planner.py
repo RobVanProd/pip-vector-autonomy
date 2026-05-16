@@ -4,8 +4,7 @@ import json
 import os
 import time
 
-import httpx
-
+from .ollama_runtime import ollama_generate
 from .personality import CHARACTER, clean_say_text, is_forbidden_speech, time_context
 from .safety import SAFE_ANIMATION_ALIASES, safety_filter
 from .memory import memory_context
@@ -167,12 +166,9 @@ async def create_plan(
         "options": {"temperature": 0.32, "num_predict": OLLAMA_PLAN_NUM_PREDICT},
     }
     http_started = time.perf_counter()
-    async with httpx.AsyncClient(timeout=OLLAMA_PLAN_TIMEOUT_SECONDS) as client:
-        response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
-        response.raise_for_status()
+    data = await ollama_generate(ollama_base_url, payload, timeout=OLLAMA_PLAN_TIMEOUT_SECONDS)
     http_elapsed_ms = round((time.perf_counter() - http_started) * 1000, 1)
 
-    data = response.json()
     raw = data.get("response", "")
     parse_error = None
     try:
@@ -287,10 +283,8 @@ async def create_reply_text(req: PlanRequest, *, model: str, ollama_base_url: st
         "options": {"temperature": 0.45, "num_predict": OLLAMA_REPLY_NUM_PREDICT},
     }
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_REPLY_TIMEOUT_SECONDS) as client:
-            response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
-            response.raise_for_status()
-        text = (response.json().get("response") or "").strip()
+        data = await ollama_generate(ollama_base_url, payload, timeout=OLLAMA_REPLY_TIMEOUT_SECONDS)
+        text = (data.get("response") or "").strip()
     except Exception:
         text = ""
     text = _clean_reply_text(text)
@@ -407,10 +401,8 @@ async def _create_plain_reply_text(
         "options": {"temperature": 0.45, "num_predict": min(40, OLLAMA_REPLY_NUM_PREDICT)},
     }
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_REPLY_TIMEOUT_SECONDS) as client:
-            response = await client.post(f"{ollama_base_url}/api/generate", json=payload)
-            response.raise_for_status()
-        text = (response.json().get("response") or "").strip()
+        data = await ollama_generate(ollama_base_url, payload, timeout=OLLAMA_REPLY_TIMEOUT_SECONDS)
+        text = (data.get("response") or "").strip()
         return _clean_reply_text(text)
     except Exception:
         return ""

@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
@@ -29,6 +28,7 @@ from .goals import GoalEngine
 from .listener import Listener
 from .memory import add_fact, load_memory, remember_turn
 from .openai_proxy import chat_completion
+from .ollama_runtime import ollama_generate
 from .planner import create_conversation_plan, create_plan
 from .robot_io import (
     capture_and_describe_view,
@@ -128,6 +128,8 @@ conversation_session = ConversationSession(
     listener=listener,
 )
 background_tasks: set[asyncio.Task] = set()
+_llm_warmup_task: asyncio.Task | None = None
+_last_llm_warmup_at = 0.0
 
 
 @app.get("/health")
@@ -182,6 +184,7 @@ async def llm_warmup(model: str | None = None):
 
 
 async def _warm_llm(model: str | None = None) -> dict:
+    global _last_llm_warmup_at
     target_model = model or MODEL
     started = time.perf_counter()
     payload = {
@@ -191,10 +194,7 @@ async def _warm_llm(model: str | None = None) -> dict:
         "keep_alive": os.getenv("VECTOR_OLLAMA_KEEP_ALIVE", "15m"),
         "options": {"temperature": 0.0, "num_predict": 4},
     }
-    async with httpx.AsyncClient(timeout=180) as client:
-        response = await client.post(f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate", json=payload)
-        response.raise_for_status()
-    data = response.json()
+    data = await ollama_generate(OLLAMA_BASE_URL, payload, timeout=180)
     result = {
         "ok": True,
         "model": target_model,
@@ -210,10 +210,21 @@ async def _warm_llm(model: str | None = None) -> dict:
         ) if data.get(key) is not None},
     }
     add_event("llm_warmup", result)
+    if target_model == MODEL:
+        _last_llm_warmup_at = time.monotonic()
     return result
 
 
 def _schedule_llm_warmup(reason: str) -> None:
+    global _llm_warmup_task, _last_llm_warmup_at
+    now = time.monotonic()
+    if _llm_warmup_task is not None and not _llm_warmup_task.done():
+        add_event("llm_rewarm_skipped", {"reason": reason, "why": "warmup already running"})
+        return
+    if now - _last_llm_warmup_at < 8.0:
+        add_event("llm_rewarm_skipped", {"reason": reason, "why": "recent warmup"})
+        return
+
     async def warm() -> None:
         try:
             result = await _warm_llm()
@@ -221,7 +232,7 @@ def _schedule_llm_warmup(reason: str) -> None:
         except Exception as exc:
             add_event("llm_rewarm_error", {"reason": reason, "error": str(exc)})
 
-    _start_background_task(warm())
+    _llm_warmup_task = _start_background_task(warm())
 
 
 @app.post("/diagnostics/latency-sample")
@@ -1074,10 +1085,11 @@ voice_bridge.wake_callback = lambda text, payload, dry_run, execute: conversatio
 )
 
 
-def _start_background_task(coro) -> None:
+def _start_background_task(coro) -> asyncio.Task:
     task = asyncio.create_task(coro)
     background_tasks.add(task)
     task.add_done_callback(background_tasks.discard)
+    return task
 
 
 @app.post("/wirepod/transcript")

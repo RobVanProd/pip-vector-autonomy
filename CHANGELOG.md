@@ -21,3 +21,5 @@
 - Added `/validation/control-suite` with expected-direction checks, plus `/map/status` and `/map/observe` for durable pose + camera observations.
 - Added planner latency metrics from Ollama, `/llm/warmup`, `/diagnostics/latency-sample`, and `scripts/run-extended-harness.ps1` / `scripts/analyze-extended-harness.ps1`.
 - Reduced planner output budget and memory context for faster warm responses; separated routine map vision (`VECTOR_MAP_VISION_MODEL`) from validation vision and rewarm Gemma after vision-heavy calls to avoid model-swap latency spikes.
+- Added a serialized Ollama generate lane shared by Gemma planning, replies, warmups, and vision descriptions so local model swaps cannot stampede each other.
+- Made LLM rewarm single-flight with duplicate/recent skips, added cold-load counters to the extended harness analyzer, and added an interactive-latency harness profile that delays/disables control-suite pressure for real conversational latency runs.
